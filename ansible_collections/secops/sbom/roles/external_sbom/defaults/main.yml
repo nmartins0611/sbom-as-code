@@ -1,0 +1,8 @@
+---
+sbom_input_mode: external_sbom
+sbom_artifact_host: ""
+sbom_external_syft_path: ""
+sbom_external_cyclonedx_path: ""
+sbom_external_grype_path: ""
+sbom_target_os_distro: ""
+sbom_external_source_label: external

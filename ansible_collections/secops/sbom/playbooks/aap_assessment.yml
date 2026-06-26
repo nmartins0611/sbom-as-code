@@ -1,0 +1,198 @@
+---
+# AAP assessment job template entry point (ADR-003 single-JT pattern).
+#
+# Play 1: scan targets OR ingest external SBOM/Grype on controller
+# Play 2: build remediation plan on controller
+#
+# Survey / extra-vars:
+#   sbom_input_mode: scan | external_sbom | external_grype
+#   sbom_artifact_host: host key under artifact root (required for external modes)
+#   sbom_external_syft_path / sbom_external_cyclonedx_path / sbom_external_grype_path
+#   sbom_target_os_distro: e.g. 9.8 (external SBOM without target facts)
+#   sbom_plan_hosts: optional explicit list; defaults to limited hosts or artifact host
+
+- name: SBOM CVE assessment — scan managed hosts
+  hosts: rhel_hosts
+  gather_facts: true
+  vars:
+    sbom_scan_use_dedicated_node: "{{ (sbom_scan_node | default('') | trim | length) > 0 }}"
+    sbom_host_output_dir: "{{ sbom_remote_output_dir }}/{{ inventory_hostname }}"
+    sbom_controller_host_dir: "{{ sbom_controller_artifact_root }}/{{ inventory_hostname }}"
+  tasks:
+    - name: Skip target scan when using external SBOM input
+      ansible.builtin.meta: end_play
+      when: sbom_input_mode | default('scan') != 'scan'
+
+    - name: Validate target OS family
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['os_family'] == 'RedHat'
+        fail_msg: "secops.sbom assessment supports RHEL-family hosts only."
+
+    - name: Skip direct scan when dedicated scan node is configured
+      ansible.builtin.meta: end_play
+      when: sbom_scan_use_dedicated_node | bool
+
+    - name: Ensure remote artifact directory exists
+      ansible.builtin.file:
+        path: "{{ sbom_host_output_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: Install Syft and Grype on scan target
+      ansible.builtin.include_role:
+        name: secops.sbom.scanners
+
+    - name: Run SBOM and Grype scan on scan target
+      ansible.builtin.include_role:
+        name: secops.sbom.sbom_scan
+
+    - name: Fetch scan artifacts to controller
+      ansible.builtin.import_tasks: tasks/scan_fetch.yml
+
+- name: SBOM CVE assessment — scan via dedicated scan node
+  hosts: "{{ sbom_scan_node | default('localhost') }}"
+  gather_facts: true
+  vars:
+    sbom_scan_use_dedicated_node: "{{ (sbom_scan_node | default('') | trim | length) > 0 }}"
+    sbom_scan_targets_effective: >-
+      {{
+        sbom_scan_targets
+        if (sbom_scan_targets | default([]) | length > 0)
+        else groups['rhel_hosts'] | default([])
+      }}
+  tasks:
+    - name: Skip dedicated scan node play unless configured
+      ansible.builtin.meta: end_play
+      when: >-
+        {{ sbom_input_mode | default('scan') != 'scan' or not sbom_scan_use_dedicated_node | bool }}
+
+    - name: Validate dedicated scan node is configured
+      ansible.builtin.assert:
+        that:
+          - sbom_scan_use_dedicated_node | bool
+          - sbom_scan_node in hostvars
+        fail_msg: "Set sbom_scan_node to an inventory hostname for dedicated scanning."
+
+    - name: Install Syft and Grype on dedicated scan node
+      ansible.builtin.include_role:
+        name: secops.sbom.scanners
+
+    - name: Scan each target from dedicated scan node
+      ansible.builtin.include_tasks: tasks/scan_target.yml
+      loop: "{{ sbom_scan_targets_effective }}"
+      loop_control:
+        loop_var: sbom_scan_target_host
+      vars:
+        sbom_host_output_dir: "{{ sbom_remote_output_dir }}/{{ sbom_scan_target_host }}"
+        sbom_target_connection_vars:
+          ansible_host: "{{ hostvars[sbom_scan_target_host].ansible_host | default(sbom_scan_target_host) }}"
+          ansible_user: "{{ hostvars[sbom_scan_target_host].ansible_user | default(omit) }}"
+          ansible_ssh_private_key_file: "{{ hostvars[sbom_scan_target_host].ansible_ssh_private_key_file | default(omit) }}"
+
+- name: SBOM CVE assessment — ingest external SBOM or Grype report
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Skip external ingest in scan mode
+      ansible.builtin.meta: end_play
+      when: sbom_input_mode | default('scan') == 'scan'
+
+    - name: Validate artifact host is set for external input
+      ansible.builtin.assert:
+        that:
+          - sbom_artifact_host | default('') | length > 0
+        fail_msg: >-
+          Set sbom_artifact_host to the inventory hostname used for remediation (--limit).
+
+    - name: Ingest external SBOM artifacts
+      ansible.builtin.include_role:
+        name: secops.sbom.external_sbom
+
+    - name: Install Grype on execution node
+      ansible.builtin.include_role:
+        name: secops.sbom.scanners
+      when: sbom_input_mode == 'external_sbom'
+
+    - name: Match external SBOM with Grype on execution node
+      ansible.builtin.include_role:
+        name: secops.sbom.grype_match
+      when: sbom_input_mode == 'external_sbom'
+
+    - name: Preserve baseline Grype report after external Grype match
+      ansible.builtin.copy:
+        src: "{{ sbom_work_dir }}/grype-report.json"
+        dest: "{{ sbom_work_dir }}/grype-report.before.json"
+        remote_src: true
+      when: sbom_input_mode == 'external_sbom'
+
+- name: SBOM CVE assessment — build remediation plan on controller
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars:
+    sbom_policy_file: "{{ sbom_policy_file_path | default(playbook_dir + '/../policy/remediation.yml') }}"
+    sbom_plan_hosts_effective: "{{ sbom_plan_hosts | default([]) }}"
+  tasks:
+    - name: Discover hosts with fetched Grype reports when not specified
+      ansible.builtin.find:
+        paths: "{{ sbom_controller_artifact_root }}"
+        patterns: grype-report.json
+        recurse: true
+        file_type: file
+      register: sbom_grype_files
+      when:
+        - sbom_plan_hosts_effective | length == 0
+        - sbom_input_mode | default('scan') == 'scan'
+
+    - name: Set plan host list from discovered artifacts
+      ansible.builtin.set_fact:
+        sbom_plan_hosts: "{{ sbom_discovered_hosts }}"
+      vars:
+        sbom_discovered_hosts: >-
+          {{
+            sbom_grype_files.files
+            | map(attribute='path')
+            | map('dirname')
+            | map('basename')
+            | unique
+            | list
+          }}
+      when:
+        - sbom_plan_hosts_effective | length == 0
+        - sbom_input_mode | default('scan') == 'scan'
+
+    - name: Use explicit plan host list when provided
+      ansible.builtin.set_fact:
+        sbom_plan_hosts: "{{ sbom_plan_hosts_effective }}"
+      when: sbom_plan_hosts_effective | length > 0
+
+    - name: Set plan host from external artifact host
+      ansible.builtin.set_fact:
+        sbom_plan_hosts:
+          - "{{ sbom_artifact_host }}"
+      when:
+        - sbom_input_mode | default('scan') != 'scan'
+        - sbom_plan_hosts_effective | length == 0
+
+    - name: Fail when no Grype reports are available for planning
+      ansible.builtin.fail:
+        msg: >-
+          No grype-report.json files found under {{ sbom_controller_artifact_root }}.
+          Run scan/ingest first or set sbom_plan_hosts.
+      when: sbom_plan_hosts | default([]) | length == 0
+
+    - name: Build remediation plan on controller
+      ansible.builtin.include_role:
+        name: secops.sbom.remediation_plan
+
+    - name: Display assessment summary
+      ansible.builtin.debug:
+        msg: >-
+          Remediation plan written for {{ sbom_plan_hosts | join(', ') }} under
+          {{ sbom_controller_artifact_root }}.

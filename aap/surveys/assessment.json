@@ -1,0 +1,68 @@
+{
+  "name": "SBOM CVE Assessment",
+  "description": "Assessment input mode and external SBOM paths",
+  "spec": [
+    {
+      "type": "multiplechoice",
+      "question_name": "Input mode",
+      "question_description": "scan = Syft+Grype on targets; external_sbom = Grype only on supplied SBOM; external_grype = use supplied Grype JSON",
+      "variable": "sbom_input_mode",
+      "choices": [
+        "scan",
+        "external_sbom",
+        "external_grype"
+      ],
+      "default": "scan",
+      "required": true
+    },
+    {
+      "type": "text",
+      "question_name": "Artifact host",
+      "question_description": "Inventory hostname for artifact layout and remediation --limit (required for external modes)",
+      "variable": "sbom_artifact_host",
+      "required": false
+    },
+    {
+      "type": "text",
+      "question_name": "External Syft SBOM path",
+      "question_description": "Controller path to Syft JSON (external_sbom mode)",
+      "variable": "sbom_external_syft_path",
+      "required": false
+    },
+    {
+      "type": "text",
+      "question_name": "External CycloneDX path",
+      "question_description": "Controller path to CycloneDX JSON (external_sbom mode alternative)",
+      "variable": "sbom_external_cyclonedx_path",
+      "required": false
+    },
+    {
+      "type": "text",
+      "question_name": "External Grype report path",
+      "question_description": "Controller path to Grype JSON (external_grype mode)",
+      "variable": "sbom_external_grype_path",
+      "required": false
+    },
+    {
+      "type": "text",
+      "question_name": "Target OS version",
+      "question_description": "RHEL minor version for Grype distro when no target facts (example 9.8)",
+      "variable": "sbom_target_os_distro",
+      "default": "9.8",
+      "required": false
+    },
+    {
+      "type": "multiplechoice",
+      "question_name": "Scan scope",
+      "question_description": "Syft cataloger scope when input mode is scan",
+      "variable": "sbom_scan_scope",
+      "choices": [
+        "minimal",
+        "medium",
+        "full"
+      ],
+      "default": "minimal",
+      "required": false
+    }
+  ]
+}

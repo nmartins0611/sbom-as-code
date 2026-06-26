@@ -1,0 +1,4 @@
+---
+- name: Re-run SBOM and Grype scan for verification
+  ansible.builtin.include_role:
+    name: secops.sbom.sbom_scan

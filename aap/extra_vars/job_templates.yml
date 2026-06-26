@@ -1,0 +1,23 @@
+---
+# Recommended extra variables for AAP job templates.
+# Attach inventory/group_vars/aap.yml or merge these into JT extra vars.
+
+sbom_input_mode: scan
+sbom_scan_scope: minimal
+sbom_controller_artifact_root: /runner/project/artifacts
+sbom_artifact_root: /runner/project/artifacts
+
+# External SBOM example (assessment JT survey overrides):
+# sbom_input_mode: external_sbom
+# sbom_artifact_host: rhel1
+# sbom_external_syft_path: /runner/project/external/rhel1-sbom.syft.json
+# sbom_target_os_distro: "9.8"
+# sbom_grype_distro: redhat:9.8
+
+# External Grype example (skip Grype step):
+# sbom_input_mode: external_grype
+# sbom_artifact_host: rhel1
+# sbom_external_grype_path: /runner/project/external/rhel1-grype.json
+
+remediation_require_approval: true
+remediation_approved: false

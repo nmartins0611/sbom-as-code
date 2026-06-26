@@ -1,0 +1,2 @@
+---
+sbom_plan_staged_path: "{{ sbom_remote_output_dir }}/{{ inventory_hostname }}/remediation-plan.json"

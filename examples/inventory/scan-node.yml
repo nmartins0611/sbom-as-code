@@ -1,0 +1,14 @@
+---
+# Dedicated scan node example.
+# scan_node runs Syft/Grype orchestration; targets remain in rhel_hosts.
+#
+# ansible-playbook ansible_collections/secops/sbom/playbooks/scan.yml \
+#   -e sbom_scan_node=scan_node \
+#   -e '{"sbom_scan_targets":["rhel1"]}'
+
+all:
+  vars:
+    sbom_scan_node: scan_node
+    sbom_scan_targets:
+      - rhel1
+    sbom_scan_sync_grype_db: true

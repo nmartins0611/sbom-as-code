@@ -1,0 +1,3 @@
+---
+sbom_policy_file: "{{ playbook_dir }}/../policy/remediation.yml"
+sbom_write_findings_preview: true

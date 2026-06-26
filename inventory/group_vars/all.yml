@@ -1,0 +1,27 @@
+---
+sbom_remote_output_dir: /var/lib/sbom-scan
+sbom_scan_path: /
+# full = all Syft catalogers; medium = RPM + kernel modules; minimal = RPM DB only (default for remediation)
+sbom_scan_scope: minimal
+# Optional dedicated scan node (inventory hostname in sbom_scan_nodes). When set, scan.yml
+# prepares tooling on that host and scans rhel_hosts targets from it.
+sbom_scan_node: ""
+sbom_scan_targets: []
+sbom_scan_sync_grype_db: true
+sbom_grype_db_cache_dir: /root/.cache/grype
+sbom_input_mode: scan
+sbom_artifact_host: ""
+sbom_external_syft_path: ""
+sbom_external_cyclonedx_path: ""
+sbom_external_grype_path: ""
+sbom_target_os_distro: ""
+sbom_external_source_label: external
+remediation_require_approval: false
+remediation_approved: true
+# From playbooks/ dir: ../../../../artifacts = repo-root artifacts/
+sbom_controller_artifact_root: "{{ playbook_dir }}/../../../../artifacts"
+sbom_actionable_only: true
+grype_db_update: true
+syft_version: ""
+grype_version: ""
+remediation_allow_reboot: false

@@ -1,0 +1,96 @@
+---
+- name: Scan RHEL hosts with Syft and Grype; fetch artifacts to controller
+  hosts: rhel_hosts
+  gather_facts: true
+  vars:
+    sbom_scan_use_dedicated_node: "{{ (sbom_scan_node | default('') | trim | length) > 0 }}"
+    sbom_host_output_dir: "{{ sbom_remote_output_dir }}/{{ inventory_hostname }}"
+    sbom_controller_host_dir: "{{ sbom_controller_artifact_root }}/{{ inventory_hostname }}"
+  tasks:
+    - name: Skip direct scan when dedicated scan node is configured
+      ansible.builtin.meta: end_play
+      when: sbom_scan_use_dedicated_node | bool
+
+    - name: Validate target OS family
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['os_family'] == 'RedHat'
+        fail_msg: "secops.sbom scan supports RHEL-family hosts only."
+
+    - name: Ensure remote artifact directory exists
+      ansible.builtin.file:
+        path: "{{ sbom_host_output_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: Install Syft and Grype on scan target
+      ansible.builtin.include_role:
+        name: secops.sbom.scanners
+
+    - name: Run SBOM scan on scan target
+      ansible.builtin.include_role:
+        name: secops.sbom.sbom_scan
+
+    - name: Fetch scan artifacts to controller
+      ansible.builtin.import_tasks: tasks/scan_fetch.yml
+
+- name: Prepare dedicated scan node
+  hosts: "{{ sbom_scan_node | default('localhost') }}"
+  gather_facts: true
+  vars:
+    sbom_scan_use_dedicated_node: "{{ (sbom_scan_node | default('') | trim | length) > 0 }}"
+  tasks:
+    - name: Skip dedicated scan node play in direct mode
+      ansible.builtin.meta: end_play
+      when: not sbom_scan_use_dedicated_node | bool
+
+    - name: Validate dedicated scan node is configured
+      ansible.builtin.assert:
+        that:
+          - sbom_scan_node in hostvars
+        fail_msg: >-
+          Set sbom_scan_node to an inventory hostname (for example scan1 in sbom_scan_nodes).
+          Current value: {{ sbom_scan_node | default('') }}.
+
+    - name: Resolve scan target host list
+      ansible.builtin.set_fact:
+        sbom_scan_targets_effective: "{{ sbom_scan_targets_resolved }}"
+      vars:
+        sbom_scan_targets_resolved: >-
+          {{
+            sbom_scan_targets
+            if (sbom_scan_targets | default([]) | length > 0)
+            else groups['rhel_hosts'] | default([])
+          }}
+
+    - name: Validate scan targets are available
+      ansible.builtin.assert:
+        that:
+          - sbom_scan_targets_effective | length > 0
+        fail_msg: >-
+          No scan targets found. Set sbom_scan_targets or define hosts in rhel_hosts.
+
+    - name: Validate scan targets exist in inventory
+      ansible.builtin.assert:
+        that:
+          - item in hostvars
+        fail_msg: "Scan target {{ item }} is not defined in inventory."
+      loop: "{{ sbom_scan_targets_effective }}"
+
+    - name: Install Syft and Grype on dedicated scan node
+      ansible.builtin.include_role:
+        name: secops.sbom.scanners
+
+    - name: Scan each target from dedicated scan node
+      ansible.builtin.include_tasks: tasks/scan_target.yml
+      loop: "{{ sbom_scan_targets_effective }}"
+      loop_control:
+        loop_var: sbom_scan_target_host
+      vars:
+        sbom_host_output_dir: "{{ sbom_remote_output_dir }}/{{ sbom_scan_target_host }}"
+        sbom_target_connection_vars:
+          ansible_host: "{{ hostvars[sbom_scan_target_host].ansible_host | default(sbom_scan_target_host) }}"
+          ansible_user: "{{ hostvars[sbom_scan_target_host].ansible_user | default(omit) }}"
+          ansible_ssh_private_key_file: "{{ hostvars[sbom_scan_target_host].ansible_ssh_private_key_file | default(omit) }}"

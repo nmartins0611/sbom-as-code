@@ -1,0 +1,13 @@
+---
+# Example: ingest external Syft SBOM and plan remediation for a host.
+#
+# ansible-playbook ansible_collections/secops/sbom/playbooks/ingest_external.yml \
+#   -e @examples/external-sbom/ingest-external.example.yml
+
+sbom_input_mode: external_sbom
+sbom_artifact_host: rhel1
+sbom_external_syft_path: "{{ playbook_dir }}/../../artifacts/rhel1/sbom.syft.json"
+sbom_target_os_distro: "9.4"
+sbom_grype_distro: redhat:9.4
+remediation_require_approval: false
+remediation_approved: true

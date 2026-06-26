@@ -1,0 +1,2 @@
+---
+# Handlers reserved for future use; reboot is an explicit task gated by remediation_allow_reboot.

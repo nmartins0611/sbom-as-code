@@ -1,0 +1,159 @@
+---
+- name: Resolve Grype distro
+  ansible.builtin.set_fact:
+    sbom_grype_distro_effective: >-
+      {{
+        sbom_grype_distro
+        if (sbom_grype_distro | string | length > 0)
+        else (
+          'redhat:' + ansible_facts['distribution_version']
+          if (ansible_facts['distribution'] | default('') is match('(?i)redhat|centos|rocky|almalinux'))
+          else ('redhat:' + sbom_target_os_distro)
+        )
+      }}
+    sbom_grype_timeout_effective: >-
+      {{
+        sbom_grype_timeout | int
+        if (sbom_grype_timeout | string | length > 0)
+        else sbom_grype_timeout_default | int
+      }}
+
+- name: Validate Grype distro is configured
+  ansible.builtin.assert:
+    that:
+      - sbom_grype_distro_effective | string | length > 0
+      - sbom_grype_distro_effective is match('[^:]+:.+')
+    fail_msg: >-
+      Set sbom_grype_distro (for example redhat:9.8) or sbom_target_os_distro (for example 9.8)
+      when matching an external SBOM without RHEL target facts.
+
+- name: Stat explicit Grype SBOM input file
+  ansible.builtin.stat:
+    path: "{{ sbom_grype_sbom_file }}"
+  register: sbom_grype_explicit_stat
+  when: sbom_grype_sbom_file | string | length > 0
+
+- name: Stat Syft SBOM input file
+  ansible.builtin.stat:
+    path: "{{ sbom_work_dir }}/sbom.syft.json"
+  register: sbom_grype_syft_stat
+
+- name: Stat CycloneDX SBOM input file
+  ansible.builtin.stat:
+    path: "{{ sbom_work_dir }}/sbom.cyclonedx.json"
+  register: sbom_grype_cyclonedx_stat
+
+- name: Select Grype SBOM input file
+  ansible.builtin.set_fact:
+    sbom_grype_input_file: >-
+      {{
+        sbom_grype_sbom_file
+        if (sbom_grype_sbom_file | string | length > 0 and sbom_grype_explicit_stat.stat.exists | default(false))
+        else (
+          sbom_work_dir + '/sbom.syft.json'
+          if sbom_grype_syft_stat.stat.exists
+          else sbom_work_dir + '/sbom.cyclonedx.json'
+        )
+      }}
+
+- name: Fail when Grype SBOM input is missing
+  ansible.builtin.fail:
+    msg: >-
+      No SBOM file found for Grype in {{ sbom_work_dir }}.
+      Expected sbom.syft.json, sbom.cyclonedx.json, or sbom_grype_sbom_file.
+  when: not sbom_grype_syft_stat.stat.exists and not sbom_grype_cyclonedx_stat.stat.exists and not (sbom_grype_explicit_stat.stat.exists | default(false))
+
+- name: Ensure Grype helper directory exists
+  ansible.builtin.file:
+    path: "{{ sbom_grype_helper_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install Grype helper scripts
+  ansible.builtin.copy:
+    src: "{{ item.src }}"
+    dest: "{{ sbom_grype_helper_dir }}/{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - { src: slim_grype_report.py, dest: slim_grype_report.py }
+    - { src: count_json_matches.py, dest: count_json_matches.py }
+
+- name: Scan SBOM for CVEs with Grype
+  block:
+    - name: Capture Grype start epoch
+      ansible.builtin.command: date +%s
+      register: sbom_grype_start_epoch
+      changed_when: false
+
+    - name: Scan SBOM for CVEs with Grype (full JSON)
+      ansible.builtin.command:
+        argv: "{{ sbom_grype_full_argv }}"
+      vars:
+        sbom_grype_full_argv: >-
+          {{
+            ['grype', 'sbom:' + sbom_grype_input_file,
+             '-o', 'json=' + sbom_work_dir + '/grype-report.full.json',
+             '--distro', sbom_grype_distro_effective]
+            + (['--only-fixed'] if sbom_actionable_only | bool else [])
+            + (sbom_grype_extra_args.split() if sbom_grype_extra_args | length > 0 else [])
+          }}
+      register: sbom_grype_scan
+      changed_when: true
+      timeout: "{{ sbom_grype_timeout_effective }}"
+      when: sbom_grype_slim_output | bool
+
+    - name: Slim Grype report JSON
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ sbom_grype_helper_dir }}/slim_grype_report.py"
+          - "{{ sbom_work_dir }}/grype-report.full.json"
+          - "{{ sbom_work_dir }}/grype-report.json"
+      changed_when: true
+      when: sbom_grype_slim_output | bool
+
+    - name: Remove temporary full Grype report
+      ansible.builtin.file:
+        path: "{{ sbom_work_dir }}/grype-report.full.json"
+        state: absent
+      when: sbom_grype_slim_output | bool
+
+    - name: Scan SBOM for CVEs with Grype (slim disabled)
+      ansible.builtin.command:
+        argv: "{{ sbom_grype_direct_argv }}"
+      vars:
+        sbom_grype_direct_argv: >-
+          {{
+            ['grype', 'sbom:' + sbom_grype_input_file,
+             '-o', 'json=' + sbom_work_dir + '/grype-report.json',
+             '--distro', sbom_grype_distro_effective]
+            + (['--only-fixed'] if sbom_actionable_only | bool else [])
+            + (sbom_grype_extra_args.split() if sbom_grype_extra_args | length > 0 else [])
+          }}
+      register: sbom_grype_scan_direct
+      changed_when: true
+      timeout: "{{ sbom_grype_timeout_effective }}"
+      when: not sbom_grype_slim_output | bool
+
+    - name: Capture Grype end epoch
+      ansible.builtin.command: date +%s
+      register: sbom_grype_end_epoch
+      changed_when: false
+
+    - name: Record Grype elapsed seconds
+      ansible.builtin.set_fact:
+        sbom_grype_elapsed_seconds: "{{ (sbom_grype_end_epoch.stdout | int) - (sbom_grype_start_epoch.stdout | int) }}"
+
+- name: Count Grype vulnerability matches
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ sbom_grype_helper_dir }}/count_json_matches.py"
+      - "{{ sbom_work_dir }}/grype-report.json"
+      - matches
+  register: sbom_grype_match_count_cmd
+  changed_when: false

@@ -1,0 +1,9 @@
+---
+syft_install_url: https://get.anchore.io/syft
+grype_install_url: https://get.anchore.io/grype
+syft_install_dir: /usr/local/bin
+grype_install_dir: /usr/local/bin
+syft_version: ""
+grype_version: ""
+grype_db_update: true
+sbom_scanners_update_db: true

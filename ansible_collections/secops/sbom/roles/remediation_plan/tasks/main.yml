@@ -1,0 +1,18 @@
+---
+- name: Ensure controller artifact directory exists for host
+  ansible.builtin.file:
+    path: "{{ sbom_controller_artifact_root }}/{{ item }}"
+    state: directory
+    mode: "0750"
+  loop: "{{ sbom_plan_hosts }}"
+  run_once: true
+
+- name: Build remediation plan from fetched Grype report
+  secops.sbom.plan_rhel_remediation:
+    grype_file: "{{ sbom_controller_artifact_root }}/{{ item }}/grype-report.json"
+    output_file: "{{ sbom_controller_artifact_root }}/{{ item }}/remediation-plan.json"
+    host: "{{ item }}"
+    policy_file: "{{ sbom_policy_file }}"
+    write_findings_preview: "{{ sbom_write_findings_preview | bool }}"
+  loop: "{{ sbom_plan_hosts }}"
+  register: sbom_plan_results

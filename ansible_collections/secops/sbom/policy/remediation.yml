@@ -1,0 +1,11 @@
+---
+min_severity: high
+actionable_only: true
+ignore_cves: []
+ignore_packages: []
+remediation_allow_reboot: false
+remediation_enforce: false
+remediation_require_approval: true
+remediation_approved: false
+remediation_method: advisory_then_cve
+controller_artifact_root: "{{ playbook_dir }}/../../../../artifacts"

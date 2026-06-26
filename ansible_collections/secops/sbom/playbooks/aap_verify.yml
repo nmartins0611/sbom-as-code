@@ -1,0 +1,5 @@
+---
+# AAP verify job template entry point — re-scan or re-ingest and diff CVE counts.
+
+- name: Verify remediation results
+  ansible.builtin.import_playbook: verify.yml

@@ -1,0 +1,33 @@
+---
+- name: Ensure controller artifact directory exists
+  ansible.builtin.file:
+    path: "{{ sbom_controller_host_dir }}"
+    state: directory
+    mode: "0750"
+  delegate_to: localhost
+  become: false
+
+- name: Fetch scan artifacts to controller
+  ansible.builtin.fetch:
+    src: "{{ sbom_host_output_dir }}/{{ item }}"
+    dest: "{{ sbom_controller_host_dir }}/"
+    flat: true
+  delegate_to: "{{ sbom_fetch_delegate_host | default(inventory_hostname) }}"
+  vars:
+    sbom_fetch_host: "{{ sbom_fetch_delegate_host | default(inventory_hostname) }}"
+    ansible_host: "{{ hostvars[sbom_fetch_host].ansible_host | default(sbom_fetch_host) }}"
+    ansible_user: "{{ hostvars[sbom_fetch_host].ansible_user | default(omit) }}"
+    ansible_ssh_private_key_file: "{{ hostvars[sbom_fetch_host].ansible_ssh_private_key_file | default(omit) }}"
+  loop:
+    - sbom.syft.json
+    - sbom.cyclonedx.json
+    - grype-report.json
+    - scan-metadata.json
+
+- name: Preserve baseline Grype report for verify diff
+  ansible.builtin.copy:
+    src: "{{ sbom_controller_host_dir }}/grype-report.json"
+    dest: "{{ sbom_controller_host_dir }}/grype-report.before.json"
+    remote_src: false
+  delegate_to: localhost
+  become: false

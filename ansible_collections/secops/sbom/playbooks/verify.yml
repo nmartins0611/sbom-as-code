@@ -1,0 +1,128 @@
+---
+- name: Re-scan managed hosts after remediation
+  hosts: rhel_hosts
+  gather_facts: true
+  vars:
+    sbom_scan_use_dedicated_node: "{{ (sbom_scan_node | default('') | trim | length) > 0 }}"
+    sbom_host_output_dir: "{{ sbom_remote_output_dir }}/{{ inventory_hostname }}"
+    sbom_controller_host_dir: "{{ sbom_controller_artifact_root }}/{{ inventory_hostname }}"
+  tasks:
+    - name: Skip direct verify when dedicated scan node is configured
+      ansible.builtin.meta: end_play
+      when: sbom_scan_use_dedicated_node | bool
+
+    - name: Validate target OS family
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['os_family'] == 'RedHat'
+        fail_msg: "secops.sbom verify supports RHEL-family hosts only."
+
+    - name: Ensure remote artifact directory exists
+      ansible.builtin.file:
+        path: "{{ sbom_host_output_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: Install Syft and Grype on scan target
+      ansible.builtin.include_role:
+        name: secops.sbom.scanners
+
+    - name: Re-run SBOM and Grype scan for verification
+      ansible.builtin.include_role:
+        name: secops.sbom.sbom_scan
+
+    - name: Fetch post-remediation Grype report to controller
+      ansible.builtin.fetch:
+        src: "{{ sbom_host_output_dir }}/grype-report.json"
+        dest: "{{ sbom_controller_host_dir }}/grype-report.post.json"
+        flat: true
+
+- name: Re-scan via dedicated scan node after remediation
+  hosts: "{{ sbom_scan_node | default('localhost') }}"
+  gather_facts: true
+  vars:
+    sbom_scan_use_dedicated_node: "{{ (sbom_scan_node | default('') | trim | length) > 0 }}"
+  tasks:
+    - name: Skip dedicated verify play in direct mode
+      ansible.builtin.meta: end_play
+      when: not sbom_scan_use_dedicated_node | bool
+
+    - name: Validate dedicated scan node is configured
+      ansible.builtin.assert:
+        that:
+          - sbom_scan_node in hostvars
+        fail_msg: "Set sbom_scan_node to an inventory hostname for dedicated verify re-scan."
+
+    - name: Resolve verify target host list
+      ansible.builtin.set_fact:
+        sbom_scan_targets_effective: "{{ sbom_verify_targets_resolved }}"
+      vars:
+        sbom_verify_targets_resolved: >-
+          {{
+            sbom_scan_targets
+            if (sbom_scan_targets | default([]) | length > 0)
+            else (sbom_verify_hosts | default(groups['rhel_hosts'] | default([])))
+          }}
+
+    - name: Validate verify targets are available
+      ansible.builtin.assert:
+        that:
+          - sbom_scan_targets_effective | length > 0
+        fail_msg: "No verify targets found. Set sbom_scan_targets or sbom_verify_hosts."
+
+    - name: Install Syft and Grype on dedicated scan node
+      ansible.builtin.include_role:
+        name: secops.sbom.scanners
+
+    - name: Re-scan each target from dedicated scan node
+      ansible.builtin.include_tasks: tasks/scan_target.yml
+      loop: "{{ sbom_scan_targets_effective }}"
+      loop_control:
+        loop_var: sbom_scan_target_host
+      vars:
+        sbom_host_output_dir: "{{ sbom_remote_output_dir }}/{{ sbom_scan_target_host }}"
+        sbom_target_connection_vars:
+          ansible_host: "{{ hostvars[sbom_scan_target_host].ansible_host | default(sbom_scan_target_host) }}"
+          ansible_user: "{{ hostvars[sbom_scan_target_host].ansible_user | default(omit) }}"
+          ansible_ssh_private_key_file: "{{ hostvars[sbom_scan_target_host].ansible_ssh_private_key_file | default(omit) }}"
+
+    - name: Copy fetched Grype report to post-remediation filename
+      ansible.builtin.copy:
+        src: "{{ sbom_controller_artifact_root }}/{{ item }}/grype-report.json"
+        dest: "{{ sbom_controller_artifact_root }}/{{ item }}/grype-report.post.json"
+        remote_src: false
+      delegate_to: localhost
+      become: false
+      loop: "{{ sbom_scan_targets_effective }}"
+
+- name: Diff pre and post remediation Grype reports on controller
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars:
+    sbom_policy_file: "{{ sbom_policy_file_path | default(playbook_dir + '/../policy/remediation.yml') }}"
+  tasks:
+    - name: Build verify host list
+      ansible.builtin.set_fact:
+        sbom_verify_hosts: "{{ sbom_verify_hosts | default(groups['rhel_hosts'] | default([])) }}"
+
+    - name: Diff Grype reports for each host
+      secops.sbom.verify_grype_diff:
+        before_file: "{{ sbom_controller_artifact_root }}/{{ item }}/grype-report.before.json"
+        after_file: "{{ sbom_controller_artifact_root }}/{{ item }}/grype-report.post.json"
+        output_file: "{{ sbom_controller_artifact_root }}/{{ item }}/verify-diff.json"
+        policy_file: "{{ sbom_policy_file }}"
+      loop: "{{ sbom_verify_hosts }}"
+      register: sbom_verify_results
+
+    - name: Display verify summary
+      ansible.builtin.debug:
+        msg: >-
+          Host {{ item.item }}: resolved {{ item.diff.resolved_count }} CVEs
+          (before={{ item.diff.before_count }}, after={{ item.diff.after_count }})
+      loop: "{{ sbom_verify_results.results }}"
+      loop_control:
+        label: "{{ item.item }}"

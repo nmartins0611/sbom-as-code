@@ -1,0 +1,72 @@
+---
+- name: Check whether curl is available
+  ansible.builtin.command: curl --version
+  register: sbom_curl_check
+  changed_when: false
+  failed_when: false
+
+- name: Check whether tar is available
+  ansible.builtin.command: tar --version
+  register: sbom_tar_check
+  changed_when: false
+  failed_when: false
+
+- name: Install packages required for Syft and Grype installation
+  ansible.builtin.dnf:
+    name:
+      - curl
+      - tar
+    state: present
+  when: sbom_curl_check.rc != 0 or sbom_tar_check.rc != 0
+
+- name: Check whether Syft is already installed
+  ansible.builtin.command: syft version
+  register: sbom_syft_version_check
+  changed_when: false
+  failed_when: false
+
+- name: Install Syft
+  ansible.builtin.shell: |
+    set -euo pipefail
+    curl -sSfL {{ syft_install_url }} | sh -s -- -b {{ syft_install_dir }}{% if syft_version | length > 0 %} -v {{ syft_version }}{% endif %}
+  args:
+    creates: "{{ syft_install_dir }}/syft"
+  when: sbom_syft_version_check.rc != 0
+  changed_when: true
+
+- name: Check whether Grype is already installed
+  ansible.builtin.command: grype version
+  register: sbom_grype_version_check
+  changed_when: false
+  failed_when: false
+
+- name: Install Grype
+  ansible.builtin.shell: |
+    set -euo pipefail
+    curl -sSfL {{ grype_install_url }} | sh -s -- -b {{ grype_install_dir }}{% if grype_version | length > 0 %} -v {{ grype_version }}{% endif %}
+  args:
+    creates: "{{ grype_install_dir }}/grype"
+  when: sbom_grype_version_check.rc != 0
+  changed_when: true
+
+- name: Verify Syft installation
+  ansible.builtin.command: syft version
+  register: sbom_syft_version_result
+  changed_when: false
+
+- name: Verify Grype installation
+  ansible.builtin.command: grype version
+  register: sbom_grype_version_result
+  changed_when: false
+
+- name: Capture installed tool versions
+  ansible.builtin.set_fact:
+    sbom_syft_installed_version: "{{ sbom_syft_version_result.stdout }}"
+    sbom_grype_installed_version: "{{ sbom_grype_version_result.stdout }}"
+
+- name: Update Grype vulnerability database
+  ansible.builtin.command: grype db update
+  when:
+    - grype_db_update | bool
+    - sbom_scanners_update_db | bool
+  changed_when: true

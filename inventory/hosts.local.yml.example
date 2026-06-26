@@ -1,0 +1,12 @@
+---
+# Optional local inventory overlay (copy to inventory/hosts.local.yml — gitignored).
+# Merge with: ansible-playbook ... -i inventory/hosts.yml -i inventory/hosts.local.yml
+
+all:
+  children:
+    rhel_hosts:
+      hosts:
+        rhel1:
+          ansible_host: 10.0.0.10
+          ansible_user: root
+          # ansible_ssh_private_key_file: ~/.ssh/id_ed25519

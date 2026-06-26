@@ -1,0 +1,11 @@
+---
+# AAP remediation job template entry point.
+#
+# Requires remediation-plan.json from assessment or ingest_external workflow.
+# Use survey approval gate: set remediation_approved=true after review.
+#
+# Launch with --limit matching sbom_artifact_host / scanned hosts.
+# Optional --tags for selective RHSA/CVE remediation.
+
+- name: Apply targeted RHSA/CVE security updates from remediation plan
+  ansible.builtin.import_playbook: remediate.yml

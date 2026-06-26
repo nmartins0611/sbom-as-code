@@ -1,0 +1,47 @@
+---
+- name: Apply targeted RHSA/CVE security updates from remediation plan
+  hosts: rhel_hosts
+  gather_facts: true
+  vars:
+    sbom_host_output_dir: "{{ sbom_remote_output_dir }}/{{ inventory_hostname }}"
+    sbom_plan_staged_path: "{{ sbom_remote_output_dir }}/{{ inventory_hostname }}/remediation-plan.json"
+  pre_tasks:
+    - name: Load remediation policy
+      ansible.builtin.include_vars:
+        file: "{{ sbom_policy_file_path | default(playbook_dir + '/../policy/remediation.yml') }}"
+      tags: always
+
+    - name: Require explicit approval before remediation in AAP
+      ansible.builtin.assert:
+        that:
+          - remediation_approved | bool
+        fail_msg: >-
+          Remediation blocked. Set remediation_approved=true in the job survey or workflow
+          after reviewing remediation-plan.json / findings-preview.json.
+      when: remediation_require_approval | default(true) | bool
+
+    - name: Ensure remote artifact directory exists
+      ansible.builtin.file:
+        path: "{{ sbom_host_output_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: Require remediation plan on controller
+      ansible.builtin.stat:
+        path: "{{ sbom_controller_artifact_root }}/{{ inventory_hostname }}/remediation-plan.json"
+      register: sbom_plan_stat
+      delegate_to: localhost
+      become: false
+
+    - name: Fail when remediation plan is missing
+      ansible.builtin.fail:
+        msg: >-
+          Missing remediation plan for {{ inventory_hostname }} at
+          {{ sbom_controller_artifact_root }}/{{ inventory_hostname }}/remediation-plan.json.
+          Run playbooks/plan_remediation.yml first.
+      when: not sbom_plan_stat.stat.exists
+
+  roles:
+    - role: secops.sbom.remediation_apply

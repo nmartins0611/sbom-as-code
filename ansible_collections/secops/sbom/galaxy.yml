@@ -1,0 +1,23 @@
+---
+namespace: secops
+name: sbom
+version: 0.2.0
+readme: README.md
+authors:
+  - Red Hat SecOps
+description: >
+  SBOM-driven RHEL CVE discovery and targeted security remediation.
+  Syft generates SBOM inventory, Grype matches CVEs, controller-side planning
+  produces RHSA/CVE remediation plans, and tagged dnf security updates apply fixes.
+  Supports external SBOM ingestion and AAP job template entry points.
+license_file: LICENSE
+tags:
+  - sbom
+  - security
+  - vulnerability
+  - syft
+  - grype
+  - rhel
+  - remediation
+dependencies:
+  ansible.posix: ">=1.5.0"

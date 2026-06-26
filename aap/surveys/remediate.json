@@ -1,0 +1,30 @@
+{
+  "name": "SBOM CVE Remediation Approval",
+  "description": "Confirm remediation plan review before applying dnf updates",
+  "spec": [
+    {
+      "type": "multiplechoice",
+      "question_name": "Remediation approved",
+      "question_description": "Set to true after reviewing remediation-plan.json and findings-preview.json",
+      "variable": "remediation_approved",
+      "choices": [
+        "false",
+        "true"
+      ],
+      "default": "false",
+      "required": true
+    },
+    {
+      "type": "multiplechoice",
+      "question_name": "Allow reboot",
+      "question_description": "Reboot after kernel security updates when required",
+      "variable": "remediation_allow_reboot",
+      "choices": [
+        "false",
+        "true"
+      ],
+      "default": "false",
+      "required": false
+    }
+  ]
+}

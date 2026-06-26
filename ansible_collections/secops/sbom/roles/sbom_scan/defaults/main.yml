@@ -1,0 +1,33 @@
+---
+sbom_scan_path: /
+sbom_scan_scope: minimal
+sbom_remote_output_dir: /var/lib/sbom-scan
+sbom_actionable_only: true
+sbom_grype_extra_args: ""
+sbom_syft_timeout: ""
+sbom_grype_timeout: ""
+
+sbom_scan_scope_catalogers:
+  minimal: rpm-db-cataloger
+  medium: rpm-db-cataloger,linux-kernel-cataloger
+
+sbom_scan_scope_select_catalogers:
+  minimal: +rpm-db-cataloger,-linux-kernel-cataloger,-go-module-binary-cataloger,-python-installed-package-cataloger,-python-package-cataloger
+  medium: +rpm-db-cataloger,+linux-kernel-cataloger,-go-module-binary-cataloger,-python-installed-package-cataloger,-python-package-cataloger
+
+sbom_grype_distro: ""
+sbom_grype_slim_output: true
+sbom_grype_helper_dir: /usr/local/lib/secops-sbom
+
+sbom_syft_timeout_by_scope:
+  minimal: 300
+  medium: 600
+  full: 1800
+
+sbom_scan_target_host: ""
+sbom_scan_node_name: ""
+
+sbom_grype_timeout_by_scope:
+  minimal: 600
+  medium: 900
+  full: 1800

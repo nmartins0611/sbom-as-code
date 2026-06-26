@@ -1,0 +1,21 @@
+---
+# Example host/group overrides for sbom_scan_scope.
+# Merge into inventory/group_vars or pass with -e @examples/inventory/scan-scopes.yml
+
+all:
+  vars:
+    # RPM packages only — fastest; matches dnf security remediation surface
+    sbom_scan_scope: minimal
+
+rhel_hosts:
+  vars:
+    # Uncomment one scope for all managed RHEL hosts:
+    # sbom_scan_scope: minimal
+    # sbom_scan_scope: medium
+    # sbom_scan_scope: full
+
+# Per-host examples (add under hosts: in inventory/hosts.yml):
+# rhel1:
+#   sbom_scan_scope: medium
+# rhel2:
+#   sbom_scan_scope: full

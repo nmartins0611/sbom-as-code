@@ -1,0 +1,69 @@
+---
+- name: Gather facts on scan target
+  ansible.builtin.setup:
+  delegate_to: "{{ sbom_scan_target_host }}"
+  vars:
+    sbom_target_connection: "{{ sbom_target_connection_vars }}"
+    ansible_host: "{{ sbom_target_connection.ansible_host }}"
+    ansible_user: "{{ sbom_target_connection.ansible_user }}"
+    ansible_ssh_private_key_file: "{{ sbom_target_connection.ansible_ssh_private_key_file }}"
+
+- name: Validate scan target OS family
+  ansible.builtin.assert:
+    that:
+      - hostvars[sbom_scan_target_host].ansible_facts['os_family'] == 'RedHat'
+    fail_msg: "secops.sbom scan supports RHEL-family hosts only ({{ sbom_scan_target_host }})."
+
+- name: Ensure remote artifact directory exists on scan target
+  ansible.builtin.file:
+    path: "{{ sbom_host_output_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  delegate_to: "{{ sbom_scan_target_host }}"
+  vars:
+    ansible_host: "{{ sbom_target_connection_vars.ansible_host }}"
+    ansible_user: "{{ sbom_target_connection_vars.ansible_user }}"
+    ansible_ssh_private_key_file: "{{ sbom_target_connection_vars.ansible_ssh_private_key_file }}"
+
+- name: Sync Grype vulnerability database from scan node to target
+  ansible.posix.synchronize:
+    src: "{{ sbom_grype_db_cache_dir }}/"
+    dest: "{{ sbom_grype_db_cache_dir }}/"
+    mode: push
+  delegate_to: "{{ sbom_scan_node }}"
+  vars:
+    ansible_host: "{{ sbom_target_connection_vars.ansible_host }}"
+    ansible_user: "{{ sbom_target_connection_vars.ansible_user }}"
+    ansible_ssh_private_key_file: "{{ sbom_target_connection_vars.ansible_ssh_private_key_file }}"
+  when: sbom_scan_sync_grype_db | bool
+
+- name: Install Syft and Grype on scan target
+  ansible.builtin.include_role:
+    name: secops.sbom.scanners
+  vars:
+    sbom_scanners_update_db: false
+    ansible_host: "{{ sbom_target_connection_vars.ansible_host }}"
+    ansible_user: "{{ sbom_target_connection_vars.ansible_user }}"
+    ansible_ssh_private_key_file: "{{ sbom_target_connection_vars.ansible_ssh_private_key_file }}"
+  delegate_to: "{{ sbom_scan_target_host }}"
+
+- name: Run SBOM scan on scan target
+  ansible.builtin.include_role:
+    name: secops.sbom.sbom_scan
+  vars:
+    sbom_scan_target_host: "{{ sbom_scan_target_host }}"
+    sbom_scan_node_name: "{{ sbom_scan_node }}"
+    sbom_host_output_dir: "{{ sbom_remote_output_dir }}/{{ sbom_scan_target_host }}"
+    ansible_host: "{{ sbom_target_connection_vars.ansible_host }}"
+    ansible_user: "{{ sbom_target_connection_vars.ansible_user }}"
+    ansible_ssh_private_key_file: "{{ sbom_target_connection_vars.ansible_ssh_private_key_file }}"
+  delegate_to: "{{ sbom_scan_target_host }}"
+
+- name: Fetch scan target artifacts to controller
+  ansible.builtin.import_tasks: scan_fetch.yml
+  vars:
+    sbom_controller_host_dir: "{{ sbom_controller_artifact_root }}/{{ sbom_scan_target_host }}"
+    sbom_host_output_dir: "{{ sbom_remote_output_dir }}/{{ sbom_scan_target_host }}"
+    sbom_fetch_delegate_host: "{{ sbom_scan_target_host }}"

@@ -1,0 +1,140 @@
+---
+- name: Validate external SBOM input mode
+  ansible.builtin.assert:
+    that:
+      - sbom_input_mode in ['external_sbom', 'external_grype']
+    fail_msg: "external_sbom role requires sbom_input_mode external_sbom or external_grype."
+
+- name: Resolve artifact host key
+  ansible.builtin.set_fact:
+    sbom_artifact_host_effective: >-
+      {{
+        sbom_artifact_host
+        if (sbom_artifact_host | string | length > 0)
+        else (sbom_plan_hosts[0] if (sbom_plan_hosts | default([]) | length > 0) else 'external-host')
+      }}
+
+- name: Validate external input paths for SBOM mode
+  ansible.builtin.assert:
+    that:
+      - (sbom_external_syft_path | string | length > 0) or (sbom_external_cyclonedx_path | string | length > 0)
+    fail_msg: >-
+      Provide sbom_external_syft_path and/or sbom_external_cyclonedx_path for external_sbom mode.
+  when: sbom_input_mode == 'external_sbom'
+
+- name: Validate external Grype report path
+  ansible.builtin.assert:
+    that:
+      - sbom_external_grype_path | string | length > 0
+    fail_msg: "Provide sbom_external_grype_path for external_grype mode."
+  when: sbom_input_mode == 'external_grype'
+
+- name: Ensure controller artifact directory exists for host
+  ansible.builtin.file:
+    path: "{{ sbom_controller_artifact_root }}/{{ sbom_artifact_host_effective }}"
+    state: directory
+    mode: "0750"
+
+- name: Stat external Syft SBOM file
+  ansible.builtin.stat:
+    path: "{{ sbom_external_syft_path }}"
+  register: sbom_external_syft_stat
+  when:
+    - sbom_input_mode == 'external_sbom'
+    - sbom_external_syft_path | string | length > 0
+
+- name: Fail when external Syft SBOM file is missing
+  ansible.builtin.fail:
+    msg: "External Syft SBOM not found at {{ sbom_external_syft_path }}"
+  when:
+    - sbom_input_mode == 'external_sbom'
+    - sbom_external_syft_path | string | length > 0
+    - not sbom_external_syft_stat.stat.exists
+
+- name: Copy external Syft SBOM into artifact layout
+  ansible.builtin.copy:
+    src: "{{ sbom_external_syft_path }}"
+    dest: "{{ sbom_controller_artifact_root }}/{{ sbom_artifact_host_effective }}/sbom.syft.json"
+    mode: "0640"
+  when:
+    - sbom_input_mode == 'external_sbom'
+    - sbom_external_syft_path | string | length > 0
+
+- name: Stat external CycloneDX SBOM file
+  ansible.builtin.stat:
+    path: "{{ sbom_external_cyclonedx_path }}"
+  register: sbom_external_cyclonedx_stat
+  when:
+    - sbom_input_mode == 'external_sbom'
+    - sbom_external_cyclonedx_path | string | length > 0
+
+- name: Fail when external CycloneDX SBOM file is missing
+  ansible.builtin.fail:
+    msg: "External CycloneDX SBOM not found at {{ sbom_external_cyclonedx_path }}"
+  when:
+    - sbom_input_mode == 'external_sbom'
+    - sbom_external_cyclonedx_path | string | length > 0
+    - not sbom_external_cyclonedx_stat.stat.exists
+
+- name: Copy external CycloneDX SBOM into artifact layout
+  ansible.builtin.copy:
+    src: "{{ sbom_external_cyclonedx_path }}"
+    dest: "{{ sbom_controller_artifact_root }}/{{ sbom_artifact_host_effective }}/sbom.cyclonedx.json"
+    mode: "0640"
+  when:
+    - sbom_input_mode == 'external_sbom'
+    - sbom_external_cyclonedx_path | string | length > 0
+
+- name: Stat external Grype report file
+  ansible.builtin.stat:
+    path: "{{ sbom_external_grype_path }}"
+  register: sbom_external_grype_stat
+  when: sbom_input_mode == 'external_grype'
+
+- name: Fail when external Grype report file is missing
+  ansible.builtin.fail:
+    msg: "External Grype report not found at {{ sbom_external_grype_path }}"
+  when:
+    - sbom_input_mode == 'external_grype'
+    - not sbom_external_grype_stat.stat.exists
+
+- name: Copy external Grype report into artifact layout
+  ansible.builtin.copy:
+    src: "{{ sbom_external_grype_path }}"
+    dest: "{{ sbom_controller_artifact_root }}/{{ sbom_artifact_host_effective }}/grype-report.json"
+    mode: "0640"
+  when: sbom_input_mode == 'external_grype'
+
+- name: Capture ingest timestamp
+  ansible.builtin.command: date -Iseconds
+  register: sbom_ingest_timestamp_cmd
+  changed_when: false
+
+- name: Write external ingest metadata
+  ansible.builtin.copy:
+    content: "{{ sbom_ingest_metadata | to_nice_json }}"
+    dest: "{{ sbom_controller_artifact_root }}/{{ sbom_artifact_host_effective }}/scan-metadata.json"
+    mode: "0640"
+  vars:
+    sbom_ingest_metadata:
+      hostname: "{{ sbom_artifact_host_effective }}"
+      input_mode: "{{ sbom_input_mode }}"
+      source_label: "{{ sbom_external_source_label }}"
+      external_syft_path: "{{ sbom_external_syft_path | default('') }}"
+      external_cyclonedx_path: "{{ sbom_external_cyclonedx_path | default('') }}"
+      external_grype_path: "{{ sbom_external_grype_path | default('') }}"
+      grype_distro: "{{ sbom_grype_distro | default('') }}"
+      target_os_distro: "{{ sbom_target_os_distro | default('') }}"
+      ingest_completed: "{{ sbom_ingest_timestamp_cmd.stdout }}"
+
+- name: Set artifact host fact for downstream roles
+  ansible.builtin.set_fact:
+    sbom_artifact_host: "{{ sbom_artifact_host_effective }}"
+    sbom_work_dir: "{{ sbom_controller_artifact_root }}/{{ sbom_artifact_host_effective }}"
+
+- name: Preserve baseline Grype report for verify diff
+  ansible.builtin.copy:
+    src: "{{ sbom_work_dir }}/grype-report.json"
+    dest: "{{ sbom_work_dir }}/grype-report.before.json"
+    remote_src: true
+  when: sbom_input_mode == 'external_grype'

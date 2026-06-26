@@ -1,0 +1,22 @@
+---
+# AAP / automation controller group vars.
+# Merge into inventory or set as Job Template extra variables.
+
+sbom_input_mode: scan
+sbom_artifact_root: "{{ lookup('env', 'SBOM_ARTIFACT_ROOT') | default('/runner/project/artifacts', true) }}"
+sbom_controller_artifact_root: "{{ sbom_artifact_root }}"
+
+# External SBOM ingest (assessment survey)
+sbom_artifact_host: ""
+sbom_external_syft_path: ""
+sbom_external_cyclonedx_path: ""
+sbom_external_grype_path: ""
+sbom_target_os_distro: ""
+sbom_external_source_label: external
+
+# Remediation approval gate (AAP survey sets remediation_approved=true)
+remediation_require_approval: true
+remediation_approved: false
+
+# Persist artifacts across JT runs in the same project
+sbom_plan_hosts: []

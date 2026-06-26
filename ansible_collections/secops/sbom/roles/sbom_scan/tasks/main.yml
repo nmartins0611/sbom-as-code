@@ -1,0 +1,151 @@
+---
+- name: Validate scan scope
+  ansible.builtin.assert:
+    that:
+      - sbom_scan_scope | lower in ['full', 'medium', 'minimal']
+    fail_msg: "sbom_scan_scope must be full, medium, or minimal (got {{ sbom_scan_scope }})."
+
+- name: Resolve scan scope configuration
+  ansible.builtin.set_fact:
+    sbom_scan_scope_effective: "{{ sbom_scan_scope | lower }}"
+    sbom_scan_hostname: "{{ sbom_scan_target_host if (sbom_scan_target_host | string | length > 0) else inventory_hostname }}"
+    sbom_syft_timeout_effective: >-
+      {{
+        sbom_syft_timeout | int
+        if (sbom_syft_timeout | string | length > 0)
+        else sbom_syft_timeout_by_scope[sbom_scan_scope | lower] | int
+      }}
+    sbom_grype_timeout_effective: >-
+      {{
+        sbom_grype_timeout | int
+        if (sbom_grype_timeout | string | length > 0)
+        else sbom_grype_timeout_by_scope[sbom_scan_scope | lower] | int
+      }}
+    sbom_scan_catalogers_effective: >-
+      {{
+        sbom_scan_scope_catalogers[sbom_scan_scope | lower]
+        if (sbom_scan_scope | lower) != 'full'
+        else 'all-default-catalogers'
+      }}
+    sbom_work_dir: "{{ sbom_host_output_dir }}"
+
+- name: Resolve scan target address
+  ansible.builtin.set_fact:
+    sbom_scan_target_address: "{{ hostvars[sbom_scan_hostname].ansible_host | default(ansible_host | default(sbom_scan_hostname)) }}"
+
+- name: Build Syft command argv
+  ansible.builtin.set_fact:
+    sbom_syft_argv: >-
+      {{
+        ['syft', 'scan', sbom_scan_path,
+         '-o', 'json=' + sbom_host_output_dir + '/sbom.syft.json',
+         '-o', 'cyclonedx-json=' + sbom_host_output_dir + '/sbom.cyclonedx.json',
+         '--quiet']
+        + (['--override-default-catalogers', 'directory',
+            '--select-catalogers', sbom_scan_scope_select_catalogers[sbom_scan_scope_effective]]
+           if sbom_scan_scope_effective != 'full' else [])
+      }}
+
+- name: Capture scan start timestamp
+  ansible.builtin.command: date -Iseconds
+  register: sbom_scan_started_cmd
+  changed_when: false
+
+- name: Set scan start timestamp fact
+  ansible.builtin.set_fact:
+    sbom_scan_started: "{{ sbom_scan_started_cmd.stdout }}"
+
+- name: Record initial scan metadata
+  ansible.builtin.copy:
+    content: "{{ sbom_scan_metadata_initial | to_nice_json }}"
+    dest: "{{ sbom_host_output_dir }}/scan-metadata.json"
+    owner: root
+    group: root
+    mode: "0640"
+  vars:
+    sbom_scan_metadata_initial:
+      hostname: "{{ sbom_scan_hostname }}"
+      ansible_host: "{{ sbom_scan_target_address }}"
+      input_mode: scan
+      scan_path: "{{ sbom_scan_path }}"
+      scan_scope: "{{ sbom_scan_scope_effective }}"
+      syft_catalogers: "{{ sbom_scan_catalogers_effective }}"
+      scan_node: "{{ sbom_scan_node_name | default('') }}"
+      grype_slim_output: "{{ sbom_grype_slim_output | bool }}"
+      scan_started: "{{ sbom_scan_started }}"
+
+- name: Generate SBOM with Syft
+  block:
+    - name: Capture Syft start epoch
+      ansible.builtin.command: date +%s
+      register: sbom_syft_start_epoch
+      changed_when: false
+
+    - name: Run Syft scan
+      ansible.builtin.command:
+        argv: "{{ sbom_syft_argv }}"
+      register: sbom_syft_scan
+      changed_when: true
+      timeout: "{{ sbom_syft_timeout_effective }}"
+
+    - name: Capture Syft end epoch
+      ansible.builtin.command: date +%s
+      register: sbom_syft_end_epoch
+      changed_when: false
+
+    - name: Record Syft elapsed seconds
+      ansible.builtin.set_fact:
+        sbom_syft_elapsed_seconds: "{{ (sbom_syft_end_epoch.stdout | int) - (sbom_syft_start_epoch.stdout | int) }}"
+
+- name: Match SBOM vulnerabilities with Grype
+  ansible.builtin.include_role:
+    name: secops.sbom.grype_match
+  vars:
+    sbom_grype_timeout_default: "{{ sbom_grype_timeout_effective }}"
+
+- name: Count SBOM artifacts
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ sbom_grype_helper_dir }}/count_json_matches.py"
+      - "{{ sbom_host_output_dir }}/sbom.syft.json"
+      - artifacts
+  register: sbom_artifact_count_cmd
+  changed_when: false
+
+- name: Capture scan completion timestamp
+  ansible.builtin.command: date -Iseconds
+  register: sbom_scan_completed_cmd
+  changed_when: false
+
+- name: Update scan metadata with completion details
+  ansible.builtin.copy:
+    content: "{{ sbom_scan_metadata_final | to_nice_json }}"
+    dest: "{{ sbom_host_output_dir }}/scan-metadata.json"
+    owner: root
+    group: root
+    mode: "0640"
+  vars:
+    sbom_scan_metadata_final:
+      hostname: "{{ sbom_scan_hostname }}"
+      ansible_host: "{{ sbom_scan_target_address }}"
+      input_mode: scan
+      scan_path: "{{ sbom_scan_path }}"
+      scan_scope: "{{ sbom_scan_scope_effective }}"
+      syft_catalogers: "{{ sbom_scan_catalogers_effective }}"
+      scan_node: "{{ sbom_scan_node_name | default('') }}"
+      grype_distro: "{{ sbom_grype_distro_effective | default('') }}"
+      grype_slim_output: "{{ sbom_grype_slim_output | bool }}"
+      scan_started: "{{ sbom_scan_started }}"
+      scan_completed: "{{ sbom_scan_completed_cmd.stdout }}"
+      os: "{{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}"
+      kernel: "{{ ansible_facts['kernel'] }}"
+      architecture: "{{ ansible_facts['architecture'] }}"
+      syft_version: "{{ sbom_syft_installed_version | default('unknown') }}"
+      grype_version: "{{ sbom_grype_installed_version | default('unknown') }}"
+      syft_timeout_seconds: "{{ sbom_syft_timeout_effective }}"
+      grype_timeout_seconds: "{{ sbom_grype_timeout_effective }}"
+      syft_elapsed_seconds: "{{ sbom_syft_elapsed_seconds }}"
+      grype_elapsed_seconds: "{{ sbom_grype_elapsed_seconds }}"
+      sbom_artifact_count: "{{ sbom_artifact_count_cmd.stdout | int }}"
+      vulnerability_match_count: "{{ sbom_grype_match_count_cmd.stdout | int }}"

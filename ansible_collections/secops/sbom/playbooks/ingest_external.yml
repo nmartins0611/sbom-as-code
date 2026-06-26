@@ -1,0 +1,64 @@
+---
+# Ingest an external SBOM or Grype report and build a remediation plan on the controller.
+#
+# Use when SBOM is produced outside this collection (CI pipeline, vendor, registry scan).
+# Remediation still runs against inventory hosts via remediate.yml / aap_remediate.yml.
+#
+# Variables:
+#   sbom_input_mode: external_sbom | external_grype
+#   sbom_artifact_host: inventory hostname key for artifact layout (must match remediate --limit)
+#   sbom_external_syft_path: controller path to Syft JSON SBOM
+#   sbom_external_cyclonedx_path: controller path to CycloneDX JSON (optional alternative)
+#   sbom_external_grype_path: controller path to Grype JSON (external_grype mode only)
+#   sbom_target_os_distro: RHEL minor version when no target facts (for example 9.8)
+#   sbom_grype_distro: override Grype distro (for example redhat:9.8)
+
+- name: Ingest external SBOM or Grype report on controller
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars:
+    sbom_policy_file: "{{ sbom_policy_file_path | default(playbook_dir + '/../policy/remediation.yml') }}"
+  tasks:
+    - name: Validate external input mode
+      ansible.builtin.assert:
+        that:
+          - sbom_input_mode in ['external_sbom', 'external_grype']
+        fail_msg: "ingest_external.yml requires sbom_input_mode external_sbom or external_grype."
+
+    - name: Ingest external SBOM artifacts
+      ansible.builtin.include_role:
+        name: secops.sbom.external_sbom
+
+    - name: Install Grype on controller execution environment
+      ansible.builtin.include_role:
+        name: secops.sbom.scanners
+      when: sbom_input_mode == 'external_sbom'
+
+    - name: Match external SBOM with Grype on controller
+      ansible.builtin.include_role:
+        name: secops.sbom.grype_match
+      when: sbom_input_mode == 'external_sbom'
+
+    - name: Preserve baseline Grype report after external Grype match
+      ansible.builtin.copy:
+        src: "{{ sbom_work_dir }}/grype-report.json"
+        dest: "{{ sbom_work_dir }}/grype-report.before.json"
+        remote_src: true
+      when: sbom_input_mode == 'external_sbom'
+
+    - name: Set plan host list for external ingest
+      ansible.builtin.set_fact:
+        sbom_plan_hosts:
+          - "{{ sbom_artifact_host }}"
+
+    - name: Build remediation plan from external input
+      ansible.builtin.include_role:
+        name: secops.sbom.remediation_plan
+
+    - name: Display ingest summary
+      ansible.builtin.debug:
+        msg: >-
+          External {{ sbom_input_mode }} ingested for host {{ sbom_artifact_host }}.
+          Plan: {{ sbom_controller_artifact_root }}/{{ sbom_artifact_host }}/remediation-plan.json

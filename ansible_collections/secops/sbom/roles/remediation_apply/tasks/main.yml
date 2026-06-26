@@ -1,0 +1,61 @@
+---
+- name: Stage remediation plan on managed host
+  ansible.builtin.copy:
+    src: "{{ sbom_controller_artifact_root }}/{{ inventory_hostname }}/remediation-plan.json"
+    dest: "{{ sbom_plan_staged_path }}"
+    owner: root
+    group: root
+    mode: "0640"
+
+- name: Load remediation plan
+  ansible.builtin.slurp:
+    src: "{{ sbom_plan_staged_path }}"
+  register: sbom_plan_slurp
+
+- name: Set remediation plan fact
+  ansible.builtin.set_fact:
+    sbom_remediation_plan: "{{ sbom_plan_slurp.content | b64decode | from_json }}"
+
+- name: Apply RHSA advisory updates
+  ansible.builtin.command:
+    cmd: "dnf update-minimal --advisory {{ item.id }} -y"
+  loop: "{{ sbom_remediation_plan.advisories | default([]) }}"
+  loop_control:
+    label: "{{ item.id }}"
+  register: sbom_advisory_apply
+  changed_when: sbom_advisory_apply.rc == 0 and 'Nothing to do' not in sbom_advisory_apply.stdout
+  when:
+    - item.id is defined
+    - item.id | length > 0
+
+- name: Apply CVE fallback security updates
+  ansible.builtin.command:
+    cmd: "dnf update-minimal --cve {{ item.cve }} -y"
+  loop: "{{ sbom_remediation_plan.cve_fallback | default([]) }}"
+  loop_control:
+    label: "{{ item.cve }}"
+  register: sbom_cve_apply
+  changed_when: sbom_cve_apply.rc == 0 and 'Nothing to do' not in sbom_cve_apply.stdout
+  when:
+    - item.cve is defined
+    - item.cve | length > 0
+
+- name: Determine whether reboot is required after changed kernel remediations
+  ansible.builtin.set_fact:
+    sbom_reboot_needed: "{{ sbom_reboot_needed_eval | bool }}"
+  vars:
+    sbom_advisory_changed: "{{ sbom_advisory_apply.results | default([]) | selectattr('changed') | map(attribute='item') | list }}"
+    sbom_cve_changed: "{{ sbom_cve_apply.results | default([]) | selectattr('changed') | map(attribute='item') | list }}"
+    sbom_reboot_needed_eval: >-
+      {{
+        (sbom_advisory_changed | selectattr('reboot_required', 'equalto', true) | list | length > 0)
+        or (sbom_cve_changed | selectattr('reboot_required', 'equalto', true) | list | length > 0)
+      }}
+
+- name: Reboot host after kernel security updates when allowed
+  ansible.builtin.reboot:
+    msg: Reboot triggered by secops.sbom kernel security remediation
+    reboot_timeout: 900
+  when:
+    - remediation_allow_reboot | bool
+    - sbom_reboot_needed | default(false) | bool

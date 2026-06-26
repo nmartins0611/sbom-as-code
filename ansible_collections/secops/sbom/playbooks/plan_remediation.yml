@@ -1,0 +1,48 @@
+---
+- name: Build remediation plans on controller from fetched Grype reports
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars:
+    sbom_policy_file: "{{ sbom_policy_file_path | default(playbook_dir + '/../policy/remediation.yml') }}"
+    sbom_plan_hosts_effective: "{{ sbom_plan_hosts | default([]) }}"
+  pre_tasks:
+    - name: Discover hosts with fetched Grype reports when not specified
+      ansible.builtin.find:
+        paths: "{{ sbom_controller_artifact_root }}"
+        patterns: grype-report.json
+        recurse: true
+        file_type: file
+      register: sbom_grype_files
+      when: sbom_plan_hosts_effective | length == 0
+
+    - name: Set plan host list from discovered artifacts
+      ansible.builtin.set_fact:
+        sbom_plan_hosts: "{{ sbom_discovered_hosts }}"
+      vars:
+        sbom_discovered_hosts: >-
+          {{
+            sbom_grype_files.files
+            | map(attribute='path')
+            | map('dirname')
+            | map('basename')
+            | unique
+            | list
+          }}
+      when: sbom_plan_hosts_effective | length == 0
+
+    - name: Use explicit plan host list when provided
+      ansible.builtin.set_fact:
+        sbom_plan_hosts: "{{ sbom_plan_hosts_effective }}"
+      when: sbom_plan_hosts_effective | length > 0
+
+    - name: Fail when no Grype reports are available for planning
+      ansible.builtin.fail:
+        msg: >-
+          No grype-report.json files found under {{ sbom_controller_artifact_root }}.
+          Run playbooks/scan.yml first or set sbom_plan_hosts.
+      when: sbom_plan_hosts | default([]) | length == 0
+
+  roles:
+    - role: secops.sbom.remediation_plan
