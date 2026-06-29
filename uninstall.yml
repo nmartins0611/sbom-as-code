@@ -1,0 +1,57 @@
+---
+# Remove SBOM-as-Code JTs from AAP Controller
+#
+# Usage:
+#   ansible-playbook uninstall.yml \
+#     -e aap_host=https://controller.example.com \
+#     -e aap_token=<token>
+
+- name: "Uninstall: SBOM-as-Code Job Templates"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    aap_host: "{{ lookup('env', 'AAP_HOST') }}"
+    aap_token: "{{ lookup('env', 'AAP_API_TOKEN') }}"
+
+    jt_names:
+      - "SBOM CVE Assessment"
+      - "SBOM CVE Remediate"
+      - "SBOM CVE Verify"
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - aap_host | length > 0
+          - aap_token | length > 0
+        fail_msg: "Set AAP_HOST and AAP_API_TOKEN"
+
+    - name: Find job templates by name
+      ansible.builtin.uri:
+        url: "{{ aap_host }}/api/controller/v2/job_templates/?name={{ item | urlencode }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ aap_token }}"
+        validate_certs: false
+        status_code: [200]
+      loop: "{{ jt_names }}"
+      loop_control:
+        label: "{{ item }}"
+      register: _jt_lookup
+      failed_when: false
+
+    - name: Delete job templates
+      ansible.builtin.uri:
+        url: "{{ aap_host }}/api/controller/v2/job_templates/{{ item.json.results[0].id }}/"
+        method: DELETE
+        headers:
+          Authorization: "Bearer {{ aap_token }}"
+        validate_certs: false
+        status_code: [202, 204]
+      loop: "{{ _jt_lookup.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.json.results | default([]) | length > 0
+      failed_when: false
