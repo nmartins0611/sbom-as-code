@@ -1,0 +1,104 @@
+---
+# Register SBOM-as-Code JTs on AAP Controller
+#
+# Usage:
+#   ansible-playbook install.yml \
+#     -e aap_host=https://controller.example.com \
+#     -e aap_token=<token> \
+#     -e organization=Default \
+#     -e inventory=<inventory_name> \
+#     -e project=<project_name>
+#
+# Creates three Job Templates:
+#   1. SBOM CVE Assessment  — scan + plan
+#   2. SBOM CVE Remediate   — apply patches (requires approval)
+#   3. SBOM CVE Verify      — re-scan and diff
+#
+# Prerequisites:
+#   - EE secops-sbom-ee:latest built and pushed to PAH or registry
+#   - Project synced with this repository
+#   - Target inventory with RHEL hosts
+
+- name: "Install: SBOM-as-Code Job Templates"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    aap_host: "{{ lookup('env', 'AAP_HOST') }}"
+    aap_token: "{{ lookup('env', 'AAP_API_TOKEN') }}"
+    org_name: "{{ organization | default('Default') }}"
+    project_name: "{{ project | default('sbom-as-code') }}"
+    ee_name: "{{ execution_environment | default('secops-sbom-ee') }}"
+    inventory_name: "{{ inventory | default('') }}"
+
+    job_templates:
+      - name: "SBOM CVE Assessment"
+        playbook: "ansible_collections/secops/sbom/playbooks/aap_assessment.yml"
+        ask_variables_on_launch: true
+        ask_inventory_on_launch: true
+        ask_limit_on_launch: true
+        become_enabled: true
+        use_fact_cache: true
+        survey_file: "aap/surveys/assessment.json"
+
+      - name: "SBOM CVE Remediate"
+        playbook: "ansible_collections/secops/sbom/playbooks/aap_remediate.yml"
+        ask_variables_on_launch: true
+        ask_inventory_on_launch: true
+        ask_limit_on_launch: true
+        become_enabled: true
+        survey_file: "aap/surveys/remediate.json"
+
+      - name: "SBOM CVE Verify"
+        playbook: "ansible_collections/secops/sbom/playbooks/aap_verify.yml"
+        ask_variables_on_launch: true
+        ask_inventory_on_launch: true
+        ask_limit_on_launch: true
+        become_enabled: true
+        use_fact_cache: true
+
+  tasks:
+    - name: Validate required variables
+      ansible.builtin.assert:
+        that:
+          - aap_host | length > 0
+          - aap_token | length > 0
+          - org_name | length > 0
+          - project_name | length > 0
+        fail_msg: "Set AAP_HOST and AAP_API_TOKEN, or pass -e aap_host=... -e aap_token=..."
+
+    - name: Create job templates
+      ansible.builtin.uri:
+        url: "{{ aap_host }}/api/controller/v2/job_templates/"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ aap_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          name: "{{ item.name }}"
+          organization: "{{ org_name }}"
+          project: "{{ project_name }}"
+          playbook: "{{ item.playbook }}"
+          inventory: "{{ inventory_name if inventory_name | length > 0 else omit }}"
+          become_enabled: "{{ item.become_enabled | default(false) }}"
+          ask_variables_on_launch: "{{ item.ask_variables_on_launch | default(false) }}"
+          ask_inventory_on_launch: "{{ item.ask_inventory_on_launch | default(false) }}"
+          ask_limit_on_launch: "{{ item.ask_limit_on_launch | default(false) }}"
+          use_fact_cache: "{{ item.use_fact_cache | default(false) }}"
+        validate_certs: false
+        status_code: [200, 201]
+      loop: "{{ job_templates }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: _jt_results
+      failed_when: false
+
+    - name: Report installation result
+      ansible.builtin.debug:
+        msg: |
+          === SBOM-as-Code Job Templates Installed ===
+          {% for result in _jt_results.results %}
+          {{ result.item.name }}: {{ 'created (id=' ~ result.json.id ~ ')' if result.status in [200, 201] else 'already exists or failed' }}
+          {% endfor %}
